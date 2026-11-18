@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Food Log</title>
+<link rel="apple-touch-icon" href="icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Food Log">
+<meta name="theme-color" content="#2f6f4f">
+
 <style>
 :root{--bg:#f6f5f1;--card:#fff;--ink:#1d1d1b;--mut:#76746d;--line:#e6e4dd;--acc:#2f6f4f;--accbg:#e4f0e9;--p:#c2492f;--c:#c98a1b;--f:#3b6fb0;--r:14px}
 @media(prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#f0eee8;--mut:#9b9990;--line:#33322e;--acc:#5fb98a;--accbg:#22332a;--p:#e8826b;--c:#e5b24f;--f:#7aa8e0}}
@@ -119,6 +125,7 @@ async function pushProducts(){
 }
 function persist(k,obj){
   lsSet(k,obj);
+  if(remoteCfg().url)lsSet('dirty:'+k,1);
   clearTimeout(timers[k]);
   timers[k]=setTimeout(async()=>{
     if(remoteCfg().url){
@@ -133,10 +140,42 @@ function persist(k,obj){
   },400);
 }
 const saveCfg=()=>{persist('cfg',cfg);clearTimeout(timers.prodpush);timers.prodpush=setTimeout(pushProducts,1500)};
+let saveQ=Promise.resolve(),busy=0;
 function saveMonth(key,date){
-  persist('m-'+key,months[key]);
+  lsSet('m-'+key,months[key]);
+  if(remoteCfg().url)lsSet('dirty:m-'+key,1);
   if(date){clearTimeout(timers['dp'+date]);timers['dp'+date]=setTimeout(()=>pushDiary(date),1500)}
+  busy++;
+  saveQ=saveQ.then(()=>mergeSave(key,date)).catch(()=>{}).then(()=>{busy--});
 }
+/* salva rileggendo prima il mese dal foglio e sostituendo SOLO il giorno modificato: una copia vecchia non cancella piu' gli altri giorni */
+async function mergeSave(key,date){
+  if(date&&remoteCfg().url){
+    try{
+      const x=await rcall({action:'get',key:'m-'+key});
+      if(x&&x.ok){
+        const fresh=(x.data&&x.data.days)?x.data:{days:{}};
+        const mine=months[key]&&months[key].days[date];
+        if(mine)fresh.days[date]=mine;else delete fresh.days[date];
+        months[key]=fresh;
+      }
+    }catch(e){}
+  }
+  persist('m-'+key,months[key]);
+}
+async function refreshMonth(){
+  if(!remoteCfg().url||busy)return;
+  const a=document.activeElement;if(a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'))return;
+  const key=ymOf(cur);
+  if(lsGet('dirty:m-'+key))return;
+  try{
+    const x=await rcall({action:'get',key:'m-'+key});
+    if(x&&x.ok&&x.data&&x.data.days&&!busy){months[key]=x.data;lsSet('m-'+key,x.data);render()}
+  }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshMonth()});
+window.addEventListener('focus',refreshMonth);
+window.addEventListener('pageshow',refreshMonth);
 
 async function initStore(){
   try{
